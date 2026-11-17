@@ -9,6 +9,7 @@ _Windows precompiled version may need HTTPS libraries_
 - nsrp -n:50 -m:1459560 -> generates 1459560_review.md for "Untitled Space Game", newest 50 responses
 - nsrp -d:"cs2data" -h:730 -> generates 730_review.html & .md for "Counter-Strike 2", and saves it in "cs2data" subfolder
 - nsrp -j:1454400 -> generates 1454400_review.json for "Cookie Clicker"
+- nsrp -c:"sessionid=ABC..." -m:730 -> sends a logged-in Steam session cookie (helps when the appreviews endpoint is bot-blocked), then generates 730_review.md
 
 ## Compilation
 

@@ -3,6 +3,9 @@ const
   pkgVersion*     = "2026.09.07.1"
   pkgAuthor*      = "Michael Adams, unquietwiki@gmail.com"
   pkgDescription* = "Download Steam(TM) game reviews into three different formats"
+  # A real browser User-Agent. Steam's anti-bot layer flags the default
+  # "Nim HttpClient" UA, so present as a normal desktop browser.
+  steamUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 
 # Libraries
 import std/[httpclient, json, net, os, parseopt, re, streams, strscans, strutils, times, uri]
@@ -13,6 +16,10 @@ var
   reviewLimit: int = 0
   dataDirectory: string = "."
   steamid: int = 0
+  # Optional Steam session cookie (e.g. "sessionid=...") supplied via -c.
+  # A logged-in session is what usually gets the appreviews endpoint to
+  # return JSON instead of a bot-block page.
+  sessionCookie: string = ""
 let
   timeIsNow = now().utc
 
@@ -30,10 +37,17 @@ proc prepareDataDir(dirData: string) =
     if(not dirExists(dirData)):
       createDir(dirData)
 
+# Build an HTTP client that looks like a normal browser and, when a Steam
+# session cookie was supplied (see -c), sends it on every request.
+proc newSteamClient(): HttpClient =
+  result = newHttpClient(steamUserAgent)
+  if sessionCookie.len > 0:
+    result.headers.add("Cookie", sessionCookie)
+
 # Grab the name of the game/application from API
 proc grabTitleAndReleaseDate(): (string, string) =
   var
-    client = newHttpClient()
+    client = newSteamClient()
     title = "COULD NOT RETREIVE TITLE"
     releaseDate = "UNRELEASED"
   try:
@@ -52,7 +66,7 @@ proc grabTitleAndReleaseDate(): (string, string) =
 # Grab JSON fragment from API
 proc grabAPIData(cursor: string, numPerPage: int = 100): string =  
   var
-    client = newHttpClient()
+    client = newSteamClient()
     rawData: string = ""
   try:
     echo "Using cursor: " & cursor
@@ -135,6 +149,17 @@ proc mdTableRow(cells: seq[string]): string =
 
 # Generate Markdown format of JSON data
 proc makeMarkdown(jsonData: JsonNode, filename: string): (bool) =
+  # Steam's anti-bot layer answers blocked/anonymous requests with a
+  # "Welcome to Steam" HTML page instead of JSON. That surfaces here as an
+  # empty/invalid JSON tree; detect it and fail with a clear message rather
+  # than crashing on a missing node further down.
+  if not (jsonData.contains("query_summary") and jsonData.contains("reviews") and jsonData["reviews"].len > 0):
+    echo "Steam did not return any review data for this app."
+    echo "This is usually Steam's bot protection: the appreviews endpoint"
+    echo "answered with a 'Welcome to Steam' page instead of JSON."
+    echo "Try again later, from a different network, or with a logged-in"
+    echo "Steam session. See https://store.steampowered.com/appreviews/"
+    return false
   var
     titleAndRelease = grabTitleAndReleaseDate()
     streamMD = newFileStream(filename, fmWrite)
@@ -281,6 +306,7 @@ proc writeHelp() =
   echo ""
   echo "Add a review limit: nsrp -n:REVEWLIMIT (subsequent command)"
   echo "Specify output dir: nsrp -d:DIRECTORY  (subsequent command)"
+  echo "Steam session cookie: nsrp -c:COOKIE   (subsequent command, e.g. 'sessionid=...')"
   echo "JSON:               nsrp -j:STEAMID"
   echo "Markdown:           nsrp -m:STEAMID"
   echo "HTML:               nsrp -h:STEAMID"
@@ -305,6 +331,9 @@ for kind, key, val in getopt():
       except ValueError:
         echo "Must enter a valid integer for review limit"
         quit(1)
+    of "c":
+      sessionCookie = val
+      echo "Using supplied Steam session cookie."
     of "m":
       try:
         steamid = parseInt(val)
@@ -345,6 +374,9 @@ for kind, key, val in getopt():
         steamid = parseInt(val)
         echo "Outputting JSON for SteamID ", $steamid
         var data = grabData()
+        if not (data.contains("query_summary") and data.contains("reviews") and data["reviews"].len > 0):
+          echo "Steam did not return any review data for this app (likely blocked by bot protection)."
+          quit(1)
         prepareDataDir(dataDirectory)
         writeFile(joinPath(dataDirectory, $steamid & "_review.json"),pretty(data))
         quit(0)
